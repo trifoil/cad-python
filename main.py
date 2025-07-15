@@ -28,12 +28,18 @@ class CustomTitleBar(QWidget):
         self.min_btn.setFixedSize(28, 28)
         self.min_btn.clicked.connect(self.on_minimize)
         layout.addWidget(self.min_btn)
+        self.max_btn = QPushButton("❐", self)
+        self.max_btn.setObjectName("TitleBarButton")
+        self.max_btn.setFixedSize(28, 28)
+        self.max_btn.clicked.connect(self.on_maximize_restore)
+        layout.addWidget(self.max_btn)
         self.close_btn = QPushButton("×", self)
         self.close_btn.setObjectName("TitleBarButton")
         self.close_btn.setFixedSize(28, 28)
         self.close_btn.clicked.connect(self.on_close)
         layout.addWidget(self.close_btn)
         self._drag_pos = None
+        self._is_maximized = False
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
@@ -41,12 +47,17 @@ class CustomTitleBar(QWidget):
             event.accept()
 
     def mouseMoveEvent(self, event):
-        if self._drag_pos and event.buttons() & Qt.LeftButton:
+        if self._drag_pos and event.buttons() & Qt.LeftButton and not self._is_maximized:
             self.parent.move(event.globalPos() - self._drag_pos)
             event.accept()
 
     def mouseReleaseEvent(self, event):
         self._drag_pos = None
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.on_maximize_restore()
+            event.accept()
 
     def on_close(self):
         self.parent.close()
@@ -54,24 +65,40 @@ class CustomTitleBar(QWidget):
     def on_minimize(self):
         self.parent.showMinimized()
 
+    def on_maximize_restore(self):
+        if not self._is_maximized:
+            self.parent.showMaximized()
+            self.max_btn.setText("❐")  # Optionally change to a restore icon
+            self._is_maximized = True
+        else:
+            self.parent.showNormal()
+            self.max_btn.setText("❐")  # Optionally change to a maximize icon
+            self._is_maximized = False
+
 class App(QDialog):
+    BORDER_WIDTH = 5  # px, for easier testing
     def __init__(self):
         super().__init__()
+        self.setObjectName("MainWindow")
         self.title = "cad-python"
         self.left = 300
         self.top = 300
-        self.width = 900
-        self.height = 700
+        self._width = 900
+        self._height = 700
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
+        self._resizing = False
+        self._resize_dir = None
+        self._mouse_press_pos = None
+        self._mouse_press_geom = None
         self.initUI()
 
     def initUI(self):
         self.setWindowTitle(self.title)
-        self.setGeometry(self.left, self.top, self.width, self.height)
+        self.setGeometry(self.left, self.top, self._width, self._height)
         self.setStyleSheet(self.custom_stylesheet())
 
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setContentsMargins(self.BORDER_WIDTH, self.BORDER_WIDTH, self.BORDER_WIDTH, self.BORDER_WIDTH)
         main_layout.setSpacing(0)
 
         # Custom title bar
@@ -117,52 +144,142 @@ class App(QDialog):
         self.display.FitAll()
 
     def custom_stylesheet(self):
-        # Modern dark theme with custom title bar
-        return """
-        QDialog, QWidget {
+        # Border only on the main window, not on all widgets
+        return f"""
+        #MainWindow {{
+            border: {self.BORDER_WIDTH}px solid #444a57;
+            background-color: #22262e;
+        }}
+        QDialog, QWidget {{
             background-color: #22262e;
             color: #f0f0f0;
             font-family: 'Segoe UI', 'Arial', sans-serif;
             font-size: 15px;
-        }
-        QPushButton {
+        }}
+        QPushButton {{
             background-color: #2d313a;
             color: #f0f0f0;
             border: 1px solid #444a57;
             border-radius: 6px;
             padding: 6px 18px;
-        }
-        QPushButton:hover {
+        }}
+        QPushButton:hover {{
             background-color: #3a3f4b;
-        }
-        QPushButton:pressed {
+        }}
+        QPushButton:pressed {{
             background-color: #1e2127;
-        }
-        #TopBar {
+        }}
+        #TopBar {{
             background-color: #23262e;
             border-bottom: 1px solid #444a57;
-        }
-        #CustomTitleBar {
+        }}
+        #CustomTitleBar {{
             background-color: #1a1c22;
             border-bottom: 1px solid #444a57;
-        }
-        #TitleLabel {
+        }}
+        #TitleLabel {{
             font-size: 17px;
             font-weight: bold;
             color: #f0f0f0;
-        }
-        #TitleBarButton {
+        }}
+        #TitleBarButton {{
             background-color: #23262e;
             color: #f0f0f0;
             border: none;
             border-radius: 5px;
             font-size: 18px;
-        }
-        #TitleBarButton:hover {
+        }}
+        #TitleBarButton:hover {{
             background-color: #e06c75;
             color: #fff;
-        }
+        }}
         """
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._resize_dir = self._get_resize_direction(event.pos())
+            if self._resize_dir:
+                self._resizing = True
+                self._mouse_press_pos = event.globalPos()
+                self._mouse_press_geom = self.geometry()
+            else:
+                super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._resizing and self._resize_dir:
+            self._resize_window(event.globalPos())
+        else:
+            self._update_cursor(event.pos())
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._resizing = False
+        self._resize_dir = None
+        super().mouseReleaseEvent(event)
+
+    def _get_resize_direction(self, pos):
+        x, y, w, h = pos.x(), pos.y(), self.width(), self.height()
+        bw = self.BORDER_WIDTH
+        directions = []
+        if x <= bw:
+            directions.append('left')
+        if x >= w - bw:
+            directions.append('right')
+        if y <= bw:
+            directions.append('top')
+        if y >= h - bw:
+            directions.append('bottom')
+        return '+'.join(directions) if directions else None
+
+    def _update_cursor(self, pos):
+        direction = self._get_resize_direction(pos)
+        cursors = {
+            'left': Qt.SizeHorCursor,
+            'right': Qt.SizeHorCursor,
+            'top': Qt.SizeVerCursor,
+            'bottom': Qt.SizeVerCursor,
+            'left+top': Qt.SizeFDiagCursor,
+            'top+left': Qt.SizeFDiagCursor,
+            'right+bottom': Qt.SizeFDiagCursor,
+            'bottom+right': Qt.SizeFDiagCursor,
+            'right+top': Qt.SizeBDiagCursor,
+            'top+right': Qt.SizeBDiagCursor,
+            'left+bottom': Qt.SizeBDiagCursor,
+            'bottom+left': Qt.SizeBDiagCursor,
+        }
+        if direction in cursors:
+            self.setCursor(cursors[direction])
+        else:
+            self.setCursor(Qt.ArrowCursor)
+
+    def _resize_window(self, global_pos):
+        diff = global_pos - self._mouse_press_pos
+        geom = self._mouse_press_geom
+        min_width, min_height = self.minimumWidth(), self.minimumHeight()
+        x, y, w, h = geom.x(), geom.y(), geom.width(), geom.height()
+        dx, dy = diff.x(), diff.y()
+        dir = self._resize_dir
+        if 'left' in dir:
+            new_x = x + dx
+            new_w = w - dx
+            if new_w >= min_width:
+                x = new_x
+                w = new_w
+        if 'right' in dir:
+            new_w = w + dx
+            if new_w >= min_width:
+                w = new_w
+        if 'top' in dir:
+            new_y = y + dy
+            new_h = h - dy
+            if new_h >= min_height:
+                y = new_y
+                h = new_h
+        if 'bottom' in dir:
+            new_h = h + dy
+            if new_h >= min_height:
+                h = new_h
+        self.setGeometry(x, y, w, h)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
