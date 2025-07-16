@@ -4,11 +4,12 @@ from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
 from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QWidget, QLabel
 )
-from PyQt5.QtCore import Qt, QPoint
+from PyQt5.QtCore import Qt, QPoint, QEvent
 from OCC.Display.backend import load_backend
 
 load_backend("pyqt5")
 import OCC.Display.qtDisplay as qtDisplay
+from PyQt5.QtGui import QCursor
 
 class CustomTitleBar(QWidget):
     def __init__(self, parent=None, title="cad-python"):
@@ -95,8 +96,21 @@ class App(QDialog):
         self._resize_dir = None
         self._mouse_press_pos = None
         self._mouse_press_geom = None
+        self._cursor_overridden = False  # Track override state
         self.setMouseTracking(True)  # Enable mouse tracking for main window
+        self.installEventFilter(self)  # Install event filter on self
         self.initUI()
+
+    def eventFilter(self, obj, event):
+        # Always update cursor on mouse move, release, enter, leave
+        if event.type() in (QEvent.MouseMove, QEvent.MouseButtonRelease, QEvent.Enter, QEvent.Leave):
+            # Get mouse position relative to self
+            if event.type() in (QEvent.MouseMove, QEvent.MouseButtonRelease):
+                pos = obj.mapTo(self, event.pos())
+            else:
+                pos = self.mapFromGlobal(QCursor.pos())
+            self._update_cursor(pos)
+        return super().eventFilter(obj, event)
 
     def initUI(self):
         self.setWindowTitle(self.title)
@@ -109,16 +123,15 @@ class App(QDialog):
 
         # Custom title bar
         self.title_bar = CustomTitleBar(self, self.title)
+        self.title_bar.setMouseTracking(True)
+        self.title_bar.installEventFilter(self)
         main_layout.addWidget(self.title_bar, 0)
 
         # Top bar with buttons
         top_bar = QWidget(self)
         top_bar.setObjectName("TopBar")
-        top_bar.setMouseTracking(True)  # Enable mouse tracking
-        def top_bar_mouseMoveEvent(event, tb=top_bar, parent=self):
-            parent._update_cursor(tb.mapToParent(event.pos()))
-            QWidget.mouseMoveEvent(tb, event)
-        top_bar.mouseMoveEvent = top_bar_mouseMoveEvent
+        top_bar.setMouseTracking(True)
+        top_bar.installEventFilter(self)
         top_bar_layout = QHBoxLayout(top_bar)
         top_bar_layout.setContentsMargins(10, 10, 10, 10)
         top_bar_layout.setSpacing(10)
@@ -132,11 +145,8 @@ class App(QDialog):
         # 3D Viewer area
         self.canvas = qtDisplay.qtViewer3d(self)
         self.canvas.setSizePolicy(self.canvas.sizePolicy().Expanding, self.canvas.sizePolicy().Expanding)
-        self.canvas.setMouseTracking(True)  # Enable mouse tracking
-        def canvas_mouseMoveEvent(event, cv=self.canvas, parent=self):
-            parent._update_cursor(cv.mapToParent(event.pos()))
-            qtDisplay.qtViewer3d.mouseMoveEvent(cv, event)
-        self.canvas.mouseMoveEvent = canvas_mouseMoveEvent
+        self.canvas.setMouseTracking(True)
+        self.canvas.installEventFilter(self)
         main_layout.addWidget(self.canvas, 1)
         self.setLayout(main_layout)
         self.show()
@@ -231,6 +241,8 @@ class App(QDialog):
     def mouseReleaseEvent(self, event):
         self._resizing = False
         self._resize_dir = None
+        # Update cursor after resizing in case mouse is not on border
+        self._update_cursor(event.pos())
         super().mouseReleaseEvent(event)
 
     def _get_resize_direction(self, pos):
@@ -273,9 +285,13 @@ class App(QDialog):
             'bottom_left': Qt.SizeBDiagCursor,   # ↙️
         }
         if direction in cursors:
-            self.setCursor(cursors[direction])
+            if not self._cursor_overridden or QApplication.overrideCursor() is None or QApplication.overrideCursor().shape() != cursors[direction]:
+                QApplication.setOverrideCursor(cursors[direction])
+                self._cursor_overridden = True
         else:
-            self.setCursor(Qt.ArrowCursor)
+            if self._cursor_overridden:
+                QApplication.restoreOverrideCursor()
+                self._cursor_overridden = False
 
     def _resize_window(self, global_pos):
         diff = global_pos - self._mouse_press_pos
