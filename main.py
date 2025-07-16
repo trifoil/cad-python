@@ -16,6 +16,7 @@ class CustomTitleBar(QWidget):
         self.parent = parent
         self.setObjectName("CustomTitleBar")
         self.setFixedHeight(38)
+        self.setMouseTracking(True)  # Enable mouse tracking
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 0, 8, 0)
         layout.setSpacing(8)
@@ -50,6 +51,10 @@ class CustomTitleBar(QWidget):
         if self._drag_pos and event.buttons() & Qt.LeftButton and not self._is_maximized:
             self.parent.move(event.globalPos() - self._drag_pos)
             event.accept()
+        else:
+            # Forward to parent for resize cursor
+            self.parent._update_cursor(self.mapToParent(event.pos()))
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         self._drag_pos = None
@@ -76,7 +81,7 @@ class CustomTitleBar(QWidget):
             self._is_maximized = False
 
 class App(QDialog):
-    BORDER_WIDTH = 5  # px, for easier testing
+    BORDER_WIDTH = 2  # px, smaller border
     def __init__(self):
         super().__init__()
         self.setObjectName("MainWindow")
@@ -90,6 +95,7 @@ class App(QDialog):
         self._resize_dir = None
         self._mouse_press_pos = None
         self._mouse_press_geom = None
+        self.setMouseTracking(True)  # Enable mouse tracking for main window
         self.initUI()
 
     def initUI(self):
@@ -108,6 +114,11 @@ class App(QDialog):
         # Top bar with buttons
         top_bar = QWidget(self)
         top_bar.setObjectName("TopBar")
+        top_bar.setMouseTracking(True)  # Enable mouse tracking
+        def top_bar_mouseMoveEvent(event, tb=top_bar, parent=self):
+            parent._update_cursor(tb.mapToParent(event.pos()))
+            QWidget.mouseMoveEvent(tb, event)
+        top_bar.mouseMoveEvent = top_bar_mouseMoveEvent
         top_bar_layout = QHBoxLayout(top_bar)
         top_bar_layout.setContentsMargins(10, 10, 10, 10)
         top_bar_layout.setSpacing(10)
@@ -121,6 +132,11 @@ class App(QDialog):
         # 3D Viewer area
         self.canvas = qtDisplay.qtViewer3d(self)
         self.canvas.setSizePolicy(self.canvas.sizePolicy().Expanding, self.canvas.sizePolicy().Expanding)
+        self.canvas.setMouseTracking(True)  # Enable mouse tracking
+        def canvas_mouseMoveEvent(event, cv=self.canvas, parent=self):
+            parent._update_cursor(cv.mapToParent(event.pos()))
+            qtDisplay.qtViewer3d.mouseMoveEvent(cv, event)
+        self.canvas.mouseMoveEvent = canvas_mouseMoveEvent
         main_layout.addWidget(self.canvas, 1)
         self.setLayout(main_layout)
         self.show()
@@ -147,7 +163,7 @@ class App(QDialog):
         # Border only on the main window, not on all widgets
         return f"""
         #MainWindow {{
-            border: {self.BORDER_WIDTH}px solid #444a57;
+            border: {self.BORDER_WIDTH}px solid rgba(0,0,0,0); /* transparent border */
             background-color: #22262e;
         }}
         QDialog, QWidget {{
@@ -220,16 +236,29 @@ class App(QDialog):
     def _get_resize_direction(self, pos):
         x, y, w, h = pos.x(), pos.y(), self.width(), self.height()
         bw = self.BORDER_WIDTH
-        directions = []
-        if x <= bw:
-            directions.append('left')
-        if x >= w - bw:
-            directions.append('right')
-        if y <= bw:
-            directions.append('top')
-        if y >= h - bw:
-            directions.append('bottom')
-        return '+'.join(directions) if directions else None
+        left = x <= bw
+        right = x >= w - bw
+        top = y <= bw
+        bottom = y >= h - bw
+        # Corners first
+        if top and left:
+            return 'top_left'
+        if top and right:
+            return 'top_right'
+        if bottom and left:
+            return 'bottom_left'
+        if bottom and right:
+            return 'bottom_right'
+        # Edges
+        if left:
+            return 'left'
+        if right:
+            return 'right'
+        if top:
+            return 'top'
+        if bottom:
+            return 'bottom'
+        return None
 
     def _update_cursor(self, pos):
         direction = self._get_resize_direction(pos)
@@ -238,14 +267,10 @@ class App(QDialog):
             'right': Qt.SizeHorCursor,
             'top': Qt.SizeVerCursor,
             'bottom': Qt.SizeVerCursor,
-            'left+top': Qt.SizeFDiagCursor,
-            'top+left': Qt.SizeFDiagCursor,
-            'right+bottom': Qt.SizeFDiagCursor,
-            'bottom+right': Qt.SizeFDiagCursor,
-            'right+top': Qt.SizeBDiagCursor,
-            'top+right': Qt.SizeBDiagCursor,
-            'left+bottom': Qt.SizeBDiagCursor,
-            'bottom+left': Qt.SizeBDiagCursor,
+            'top_left': Qt.SizeFDiagCursor,      # ↖️
+            'bottom_right': Qt.SizeFDiagCursor,  # ↘️
+            'top_right': Qt.SizeBDiagCursor,     # ↗️
+            'bottom_left': Qt.SizeBDiagCursor,   # ↙️
         }
         if direction in cursors:
             self.setCursor(cursors[direction])
